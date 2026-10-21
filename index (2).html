@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Queda Alert</title>
+<style>
+:root{--bg:#f3f6f4;--fg:#14211c;--mut:#5b6b64;--ac:#0b6e4f;--acfg:#fff;--al:#c4121a;--box-sizing:border-box;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1714;--fg:#e8f0ec;--mut:#9fb2a9;--ac:#3ecf9a;--acfg:#04140d}}
+:root[data-theme="dark"]{--bg:#0f1714;--fg:#e8f0ec;--mut:#9fb2a9;--ac:#3ecf9a;--acfg:#04140d}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.25rem;text-align:center;padding:1.5rem}
+body.alarm{background:var(--al);color:#fff}
+h1{font-size:2rem;margin:0}
+#s{font-size:1.15rem;color:var(--mut);max-width:28ch;min-height:3em}
+body.alarm #s{color:#fff;font-size:1.6rem;font-weight:700}
+button{font:inherit;font-size:1.1rem;padding:.9rem 1.6rem;border-radius:12px;border:0;background:var(--ac);color:var(--acfg);min-width:14rem}
+button.sec{background:transparent;color:var(--fg);border:1px solid var(--mut)}
+button:focus-visible{outline:3px solid var(--fg);outline-offset:3px}
+a.call{display:inline-block;box-sizing:border-box;min-width:14rem;font-size:1.3rem;font-weight:700;padding:1rem 1.6rem;border-radius:12px;background:#fff;color:var(--al);text-decoration:none}
+a.call:focus-visible{outline:3px solid #fff;outline-offset:3px}
+a.call[hidden]{display:none}
+#n{font:inherit;font-size:1.1rem;padding:.8rem 1rem;border-radius:12px;border:1px solid var(--mut);background:transparent;color:var(--fg);width:14rem;text-align:center;box-sizing:content-box}
+body.alarm #n,body.alarm label{display:none}
+label{color:var(--mut);font-size:.95rem}
+small{color:var(--mut);max-width:32ch}
+body.alarm small{color:#fff}
+</style>
+</head>
+<body>
+<h1>Queda Alert</h1>
+<p id="s">Desconectado. Feche o BLEPad e toque em Conectar.</p>
+<button id="c">Conectar ao micro:bit</button>
+<button id="t" class="sec">Testar alarme</button>
+<a id="l" class="call" href="#" hidden>Ligar agora</a>
+<button id="p" class="sec" hidden>Parar alarme</button>
+<label for="n">Número para ligar (com DDD)</label>
+<input id="n" type="tel" inputmode="tel" autocomplete="tel" placeholder="11999999999">
+<small>Mantenha esta página aberta e a tela ligada. Com a tela bloqueada, o iPhone pode parar de receber o aviso.</small>
+<script>
+var UART='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+var ctx=null, buf='', beepTimer=null, lock=null;
+var s=document.getElementById('s'), bc=document.getElementById('c'), bt=document.getElementById('t'), bp=document.getElementById('p');
+var bl=document.getElementById('l'), inp=document.getElementById('n');
+
+// Número padrão (opcional): troque aqui se quiser deixar fixo, ex.: '11999999999'
+var NUMERO_PADRAO='';
+try{ inp.value=localStorage.getItem('numero')||NUMERO_PADRAO; }catch(e){ inp.value=NUMERO_PADRAO; }
+function numero(){
+  var n=inp.value.replace(/[^\d+]/g,'');
+  if(n && n.charAt(0)!=='+' && n.length<=11) n='+55'+n;
+  return n;
+}
+inp.oninput=function(){ try{ localStorage.setItem('numero',inp.value); }catch(e){} };
+
+function audio(){
+  if(!ctx){ var A=window.AudioContext||window.webkitAudioContext; if(A) ctx=new A(); }
+  if(ctx && ctx.state==='suspended') ctx.resume();
+}
+function beep(){
+  if(!ctx) return;
+  var o=ctx.createOscillator(), g=ctx.createGain();
+  o.type='square'; o.frequency.value=880; g.gain.value=0.25;
+  o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime+0.35);
+}
+function alarmOn(){
+  document.body.classList.add('alarm');
+  s.textContent='QUEDA DETECTADA!';
+  bp.hidden=false;
+  var n=numero();
+  if(n){ bl.href='tel:'+n; bl.textContent='Ligar para '+inp.value; bl.hidden=false; }
+  try{ if(navigator.vibrate) navigator.vibrate([400,200,400]); }catch(e){}
+  if(!beepTimer){ beep(); beepTimer=setInterval(beep,700); }
+}
+function alarmOff(){
+  document.body.classList.remove('alarm');
+  bp.hidden=true;
+  bl.hidden=true;
+  clearInterval(beepTimer); beepTimer=null;
+  s.textContent=window.__dev?('Conectado: '+window.__dev):'Desconectado.';
+}
+bt.onclick=function(){ audio(); alarmOn(); };
+bp.onclick=alarmOff;
+
+function onData(e){
+  buf+=new TextDecoder().decode(e.target.value).toUpperCase();
+  if(buf.indexOf('QUEDA')>=0){ buf=''; alarmOn(); }
+  if(buf.length>60) buf=buf.slice(-10);
+}
+
+bc.onclick=async function(){
+  audio();
+  if(!navigator.bluetooth){
+    s.textContent='Este navegador não tem Bluetooth. No iPhone, abra esta página no Bluefy.';
+    return;
+  }
+  try{
+    s.textContent='Procurando…';
+    var d=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'BBC micro:bit'}],optionalServices:[UART]});
+    d.addEventListener('gattserverdisconnected',function(){
+      window.__dev=null; s.textContent='Conexão perdida. Toque em Conectar para tentar de novo.';
+    });
+    var srv=await d.gatt.connect();
+    var svc=await srv.getPrimaryService(UART);
+    var chs=await svc.getCharacteristics();
+    var n=0;
+    for(var i=0;i<chs.length;i++){
+      if(chs[i].properties.notify||chs[i].properties.indicate){
+        await chs[i].startNotifications();
+        chs[i].addEventListener('characteristicvaluechanged',onData);
+        n++;
+      }
+    }
+    if(!n){ s.textContent='Conectou, mas o micro:bit não envia dados pelo UART. Confira o Bluetooth no MakeCode.'; return; }
+    window.__dev=d.name||'micro:bit';
+    s.textContent='Conectado: '+window.__dev+'. Aguardando QUEDA.';
+    try{ if(navigator.wakeLock) lock=await navigator.wakeLock.request('screen'); }catch(e){}
+  }catch(err){
+    s.textContent='Erro: '+(err&&err.message?err.message:err);
+  }
+};
+</script>
+</body>
+</html>
